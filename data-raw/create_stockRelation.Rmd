@@ -1,0 +1,552 @@
+---
+title: "create_stockRelation"
+author: "Kirsten Birch Håkansson, DTU Aqua"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+
+For now this script will always start with the relation created in fishPi2 many years ago, since a lot of work was put into creating the relation and it is believed more complete than ICES_StockCode and we already have code for improving it.
+
+ICES ICES_StockCode has issues with incomplete list of areas. Futher, it does not include Fisheries management units (FMU) like FU for Nephrop and SAN for sandeel.
+
+icesSD::getSD will be used for getting correct stock and species codes, plus other relevant information.
+
+DC_Annex_1 from ICES big data call will be checked, so it is possible to join to it.
+
+When ICES has created their stock relation it will be based on that one.
+
+The relation will hold the following fields
+stock_sid: the stock code used in ICES SID, from icesSD::getSD, this is considred the correct one
+stock_annex_1: should be equal to stock_sid, but somethime
+species_aphia:
+species_fao:
+species_scientific_name:
+area: 
+fmu:
+rectangle:
+quarter:
+commment:
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+
+library(icesVocab)
+library(icesSD)
+library(dplyr)
+
+update_year <- 2026
+
+devtools::source_url("https://github.com/ices-tools-dev/RDBESstockCoord/blob/main/R/funMakeRelation.R?raw=TRUE")
+```
+
+# Before updating,  do the following
+
+1.  Find the newest version of the DC_Annex_1.xlsx and copy it to inst\extdata
+
+# Getting code list from ICES
+
+```{r}
+stocks_ices <- icesVocab::getCodeList("ICES_StockCode")
+
+stocks_sid <- icesSD::getSD(year = 2026)
+
+stocks_data_call <- c()
+
+codes_aph <- icesVocab::getCodeList("SpecWoRMS")
+  names(codes_aph)[names(codes_aph) == "Key"] <- "speciesCode"
+  names(codes_aph)[names(codes_aph) == "Description"] <- "SpeciesName"
+
+  codes_FAO <- icesVocab::getCodeList("SpecASFIS")
+  names(codes_FAO)[names(codes_FAO) == "Key"] <- "Species"
+  names(codes_FAO)[names(codes_FAO) == "Description"] <- "SpeciesName"
+
+  codes_aph_FAO <- merge(codes_FAO, codes_aph, by = "SpeciesName")
+  codes_aph_FAO <- subset(codes_aph_FAO, 
+                          select=c("Species",
+                                   "SpeciesName",
+                                   "speciesCode"))
+
+ices_area <- icesVocab::getCodeList("ICES_Area")
+ices_area <- subset(ices_area, substr(Key, 1, 3) == "27." & Deprecated == F)
+
+for (i in c(2:16)) {
+  
+  dat_0 <- readxl::read_xlsx(paste0("../inst/extdata/", "DC_Annex_1.xlsx"), sheet = c(i))
+  
+  stocks_data_call <- rbind(stocks_data_call, dat_0)
+  
+  rm(dat_0)
+}
+
+stocks <- funMakeRelation(year = 2026)
+```
+
+# Fix stock per WG
+```{r}
+unique(stocks$EG)
+```
+
+## HAWG
+```{r}
+wg_name <- "HAWG"
+wg <- subset(stocks, EG == wg_name)
+wg_dc <- subset(stocks_data_call, `Expert Group` == wg_name)
+wg_eg <- subset(stocks_sid, ExpertGroup == wg_name)
+
+# Check from stock with overlapping areas, species
+dup <- mutate(group_by(wg, SpeciesName, ICESArea), no = length(StockCode))
+length(subset(dup, no > 1))
+
+subset(select(dup, -StockKeyDescription), no > 1)
+
+## Remove duplicate no > 1
+wg <- subset(wg, !(StockCode == "her.27.3a47d" & ICESArea %in% c("27.3.a", "27.3.a.20", "27.3.a.21")))
+
+rm(dup)
+
+## Remove other problems
+wg <- subset(wg, !(StockCode == "ple.27.21-32" & ICESArea == "27.3.a.20"))
+
+# Check that all data call and sid stocks are included
+mis_eg <- subset(wg_eg, !(StockKeyLabel %in% wg$StockCode))
+unique(mis_eg$StockKeyLabel)
+mis_dc <- subset(wg_dc, !(`Stock Key Label` %in% wg$StockCode))
+unique(mis_dc$`Stock Key Label`)
+
+## Add missing stocks
+stock <- unique(mis_eg$StockKeyLabel)[1]
+san.sa.5r <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 1),
+  StockCode = rep(stock, 1),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 1),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 1),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 1),
+  ICESArea = c("27.4.a"),
+  Species = rep("SAN", 1),
+  speciesCode = rep("1758", 1)
+)
+
+stock <- unique(mis_eg$StockKeyLabel)[2]
+san.sa.6 <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 5),
+  StockCode = rep(stock, 5),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 5),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 5),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 5),
+  ICESArea = c("27.3.a", "27.3.a.20", "27.3.a.21", "27.3.c", "27.3.c.22"),
+  Species = rep("SAN", 5),
+  speciesCode = rep("1758", 5)
+)
+
+stock <- unique(mis_eg$StockKeyLabel)[3]
+san.sa.7r <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 1),
+  StockCode = rep(stock, 1),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 1),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 1),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 1),
+  ICESArea = c("27.4.a"),
+  Species = rep("SAN", 1),
+  speciesCode = rep("1758", 1)
+)
+
+stock <- unique(mis_eg$StockKeyLabel)[4]
+san.sa.1r <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 2),
+  StockCode = rep(stock, 2),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 2),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 2),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 2),
+  ICESArea = c("27.4.b", "27.4.c"),
+  Species = rep("SAN", 2),
+  speciesCode = rep("1758", 2)
+)
+
+stock <- unique(mis_eg$StockKeyLabel)[5]
+san.sa.2r <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 3),
+  StockCode = rep(stock, 3),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 3),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 3),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 3),
+  ICESArea = c("27.4.b", "27.4.c", "27.3.a.20"),
+  Species = rep("SAN", 3),
+  speciesCode = rep("1758", 3)
+)
+
+stock <- unique(mis_eg$StockKeyLabel)[6]
+san.sa.3r <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 3),
+  StockCode = rep(stock, 3),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 3),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 3),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 3),
+  ICESArea = c("27.4.b", "27.4.c", "27.3.a.20"),
+  Species = rep("SAN", 3),
+  speciesCode = rep("1758", 3)
+)
+
+stock <- unique(mis_eg$StockKeyLabel)[7]
+san.sa.4 <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 2),
+  StockCode = rep(stock, 2),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 2),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 2),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 2),
+  ICESArea = c("27.4.b", "27.4.c"),
+  Species = rep("SAN", 2),
+  speciesCode = rep("1758", 2)
+)
+
+stock <- unique(mis_eg$StockKeyLabel)[8]
+san.27.6a <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 1),
+  StockCode = rep(stock, 1),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 1),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 1),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 1),
+  ICESArea = c("27.6.a"),
+  Species = rep("SAN", 1),
+  speciesCode = rep("1758", 1)
+)
+
+rm(mis_eg, mis_dc)
+
+wg <- rbind(wg, san.27.6a, san.sa.1r, san.sa.2r, san.sa.3r, san.sa.4,
+            san.sa.5r, san.sa.6, san.sa.7r)
+rm(san.27.6a, san.sa.1r, san.sa.2r, san.sa.3r, san.sa.4,
+            san.sa.5r, san.sa.6, san.sa.7r)
+
+hawg_ok <- distinct(wg, SpeciesName, StockCode, EG, StockKey, 
+StockKeyDescription, ICESArea, Species, speciesCode)
+
+# Check correct areas
+hawg_tab <- dplyr::distinct(hawg_ok, SpeciesName, StockCode, ICESArea, StockKey)
+
+hawg_tab_t <- tidyr::spread(hawg_tab, key = ICESArea, value = StockKey)
+
+rm(hawg_tab, wg_dc, wg_eg, wg, hawg_tab_t)
+```
+
+
+## WGBFAS
+```{r}
+wg_name <- "WGBFAS"
+wg <- subset(stocks, EG == wg_name)
+wg_dc <- subset(stocks_data_call, `Expert Group` == wg_name)
+wg_eg <- subset(stocks_sid, ExpertGroup == wg_name)
+
+# Check from stock with overlapping areas, species
+dup <- mutate(group_by(wg, SpeciesName, ICESArea), no = length(StockCode))
+length(subset(dup, no > 1))
+
+subset(select(dup, -StockKeyDescription), no > 1)
+
+## Remove duplicate no > 1
+wg <- subset(wg, !(StockCode == "cod.27.24-32" & ICESArea == "27.3.d.24"))
+wg <- subset(wg, !(Species == "QDQ"))
+
+rm(dup)
+
+## Remove other problems
+wg <- subset(wg, !(StockCode == "ple.27.21-32" & ICESArea == "27.3.a.20"))
+
+# Check that all data call and sid stocks are included
+mis_eg <- subset(wg_eg, !(StockKeyLabel %in% wg$StockCode))
+unique(mis_eg$StockKeyLabel)
+mis_dc <- subset(wg_dc, !(`Stock Key Label` %in% wg$StockCode))
+unique(mis_dc$`Stock Key Label`)
+
+## Add missing stocks
+stock <- unique(mis_dc$`Stock Key Label`)[1]
+bzq.27.2425 <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 2),
+  StockCode = rep(stock, 2),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 2),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 2),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 2),
+  ICESArea = c("27.3.d.24", "27.3.d.25"),
+  Species = rep("BZQ", 2),
+  speciesCode = rep("126119", 2)
+)
+
+bzq.27.2425$SpeciesName <- paste(bzq.27.2425$SpeciesName, "Platichthys flesus", "Platichthys solemdali", sep = ",")
+bzq.27.2425 <- tidyr::separate_longer_delim(data = bzq.27.2425, cols = SpeciesName, ",")
+
+bzq.27.2425$speciesCode[bzq.27.2425$SpeciesName == "Platichthys flesus"] <- "127141"
+bzq.27.2425$speciesCode[bzq.27.2425$SpeciesName == "Platichthys solemdali"] <- "1264298"
+
+stock <- unique(mis_dc$`Stock Key Label`)[2]
+bzq.27.2628 <- data.frame(
+  SpeciesName = rep(mis_eg$SpeciesScientificName[mis_eg$StockKeyLabel == stock], 4),
+  StockCode = rep(stock, 4),
+  EG = rep(mis_eg$ExpertGroup[mis_eg$StockKeyLabel == stock], 4),
+  StockKey = rep(mis_eg$StockKey[mis_eg$StockKeyLabel == stock], 4),
+  StockKeyDescription = rep(mis_eg$StockKeyDescription[mis_eg$StockKeyLabel == stock], 4),
+  ICESArea = c("27.3.d.26", "27.3.d.28", "27.3.d.28.1", "27.3.d.28.2"),
+  Species = rep("BZQ", 4),
+  speciesCode = rep("126119", 4)
+)
+
+bzq.27.2628$SpeciesName <- paste(bzq.27.2628$SpeciesName, "Platichthys flesus", "Platichthys solemdali", sep = ",")
+bzq.27.2628 <- tidyr::separate_longer_delim(data = bzq.27.2628, cols = SpeciesName, ",")
+
+bzq.27.2628$speciesCode[bzq.27.2628$SpeciesName == "Platichthys flesus"] <- "127141"
+bzq.27.2628$speciesCode[bzq.27.2628$SpeciesName == "Platichthys solemdali"] <- "1264298"
+
+rm(mis_eg, mis_dc)
+
+wg <- rbind(wg, bzq.27.2425, bzq.27.2628)
+rm(bzq.27.2425, bzq.27.2628)
+
+wgbfas_ok <- distinct(wg, SpeciesName, StockCode, EG, StockKey, 
+StockKeyDescription, ICESArea, Species, speciesCode)
+
+# Check correct areas
+wgbfas_tab <- dplyr::distinct(wgbfas_ok, SpeciesName, StockCode, ICESArea, StockKey)
+
+wgbfas_tab_t <- tidyr::spread(wgbfas_tab, key = ICESArea, value = StockKey)
+
+rm(wgbfas_tab, wg_dc, wg_eg, wg, wgbfas_tab_t)
+```
+
+
+## WGNSSK
+```{r}
+wg_name <- "WGNSSK"
+wg <- subset(stocks, EG == wg_name)
+wg_dc <- subset(stocks_data_call, `Expert Group` == wg_name)
+wg_eg <- subset(stocks_sid, ExpertGroup == wg_name)
+
+# Check from stock with overlapping areas, species
+dup <- mutate(group_by(wg, SpeciesName, ICESArea), no = length(StockCode))
+nrow(subset(dup, no > 1))
+
+rm(dup)
+
+## Remove other problems
+wg <- subset(wg, !(StockCode == "ple.27.21-32" & ICESArea == "27.3.a.20"))
+
+# Check that all data call and sid stocks are included
+mis_eg <- subset(wg_eg, !(StockKeyLabel %in% wg$StockCode))
+unique(mis_eg$StockKeyLabel)
+mis_dc <- subset(wg_dc, !(`Stock Key Label` %in% wg$StockCode))
+unique(mis_dc$`Stock Key Label`)
+
+rm(mis_eg, mis_dc)
+
+wgnssk_ok <- distinct(wg, SpeciesName, StockCode, EG, StockKey, 
+StockKeyDescription, ICESArea, Species, speciesCode)
+
+# Check correct areas
+wgnssk_tab <- dplyr::distinct(wgnssk_ok, SpeciesName, StockCode, ICESArea, StockKey)
+
+wgnssk_tab_t <- tidyr::spread(wgnssk_tab, key = ICESArea, value = StockKey)
+
+rm(wgnssk_tab, wgnssk_tab_t, wg_dc, wg_eg, wg)
+```
+
+## NWWG
+```{r}
+wg_name <- "NWWG"
+wg <- subset(stocks, EG == wg_name)
+wg_dc <- subset(stocks_data_call, `Expert Group` == wg_name)
+wg_eg <- subset(stocks_sid, ExpertGroup == wg_name)
+
+# Check from stock with overlapping areas, species
+dup <- mutate(group_by(wg, SpeciesName, ICESArea), no = length(StockCode))
+nrow(subset(dup, no > 1))
+
+wg <- subset(wg, !(StockCode == "cod.27.24-32" & ICESArea == "27.3.d.24"))
+wg <- subset(wg, !(Species == "QDQ"))
+
+rm(dup)
+
+## Remove other problems
+wg <- subset(wg, !(StockCode == "ple.27.21-32" & ICESArea == "27.3.a.20"))
+
+# Check that all data call and sid stocks are included
+mis_eg <- subset(wg_eg, !(StockKeyLabel %in% wg$StockCode))
+unique(mis_eg$StockKeyLabel)
+mis_dc <- subset(wg_dc, !(`Stock Key Label` %in% wg$StockCode))
+unique(mis_dc$`Stock Key Label`)
+
+rm(mis_eg, mis_dc)
+
+nwwg_ok <- distinct(wg, SpeciesName, StockCode, EG, StockKey, 
+StockKeyDescription, ICESArea, Species, speciesCode)
+
+# Check correct areas
+wgnssk_tab <- dplyr::distinct(nwwg_ok, SpeciesName, StockCode, ICESArea, StockKey)
+
+wgnssk_tab_t <- tidyr::spread(wgnssk_tab, key = ICESArea, value = StockKey)
+
+rm(wgnssk_tab, wgnssk_tab_t, wg_dc, wg_eg, wg)
+```
+
+
+## WGWIDE
+```{r}
+wg_name <- "WGWIDE"
+wg <- subset(stocks, EG == wg_name)
+wg_dc <- subset(stocks_data_call, `Expert Group` == wg_name)
+wg_eg <- subset(stocks_sid, ExpertGroup == wg_name)
+
+# Check from stock with overlapping areas, species
+dup <- mutate(group_by(wg, SpeciesName, ICESArea), no = length(StockCode))
+nrow(subset(dup, no > 1))
+
+wg <- subset(wg, !(StockCode == "cod.27.24-32" & ICESArea == "27.3.d.24"))
+wg <- subset(wg, !(Species == "QDQ"))
+
+rm(dup)
+
+## Remove other problems
+wg <- subset(wg, !(StockCode == "ple.27.21-32" & ICESArea == "27.3.a.20"))
+
+# Check that all data call and sid stocks are included
+mis_eg <- subset(wg_eg, !(StockKeyLabel %in% wg$StockCode))
+unique(mis_eg$StockKeyLabel)
+mis_dc <- subset(wg_dc, !(`Stock Key Label` %in% wg$StockCode))
+unique(mis_dc$`Stock Key Label`)
+
+rm(mis_eg, mis_dc)
+
+wgwide_ok <- distinct(wg, SpeciesName, StockCode, EG, StockKey, 
+StockKeyDescription, ICESArea, Species, speciesCode)
+
+# Check correct areas
+wgnssk_tab <- dplyr::distinct(wgwide_ok, SpeciesName, StockCode, ICESArea, StockKey)
+
+wgnssk_tab_t <- tidyr::spread(wgnssk_tab, key = ICESArea, value = StockKey)
+
+rm(wgnssk_tab, wgnssk_tab_t, wg_dc, wg_eg, wg)
+```
+
+# Combine data
+```{r}
+
+relation <- rbind(hawg_ok, wgbfas_ok, wgnssk_ok)
+
+```
+
+
+# Check areas
+## Add overlying
+```{r}
+ices_area_codes <- unique(ices_area$Key)
+
+relation_area_over <- relation
+added_areas <- c()
+
+for (i in c(1:length(ices_area_codes))) {
+  
+  area <- paste0(ices_area_codes[i], "\\.")
+  areas_over <- stringr::str_subset(ices_area_codes, paste0("^", area))
+  areas_over <- areas_over[areas_over != area]
+  
+  area_relation <- subset(relation, ICESArea %in% areas_over)
+  area_relation <- mutate(group_by(area_relation, StockCode), no_area = length(ICESArea))
+  area_relation <- subset(area_relation, no_area == length(areas_over))
+  area_relation$ICESArea <- gsub(pattern = "\\\\.", "", area)
+  
+  relation_area_over <- rbind(relation_area_over, select(area_relation, -no_area))
+  
+  added_areas <- rbind(added_areas, area_relation)
+
+}
+
+relation_area_over <- distinct(relation_area_over, SpeciesName, StockCode, EG, StockKey, 
+StockKeyDescription, ICESArea, Species, speciesCode)
+
+relation_area_over_tab <- dplyr::distinct(relation_area_over, SpeciesName, StockCode, ICESArea, StockKey)
+
+relation_area_over_t <- tidyr::spread(relation_area_over_tab, key = ICESArea, value = StockKey)
+```
+
+
+## Add underlying
+```{r}
+ices_area_codes <- unique(ices_area$Key)
+
+relation_area_under <- relation
+added_areas <- c()
+
+for (i in c(1:length(ices_area_codes))) {
+  area <- ices_area_codes[i]
+  areas_under <- stringr::str_subset(ices_area_codes, area)
+  areas_under <- areas_under[areas_under != area]
+  
+  if(length(areas_under > 0)) {
+  area_relation <- subset(relation_area_over, ICESArea %in% area)
+  if (nrow(area_relation) > 0) {
+    area_relation$ICESArea <- paste(areas_under, collapse = ",")
+    area_relation <- tidyr::separate_longer_delim(data = area_relation, cols = ICESArea, ",")
+    
+    relation_area_under <- rbind(relation_area_under, area_relation)
+    added_areas <- rbind(added_areas, area_relation)
+  }
+}}
+
+relation <- rbind(relation_area_over, relation_area_under)
+
+relation <- distinct(relation, SpeciesName, StockCode, EG, StockKey, 
+StockKeyDescription, ICESArea, Species, speciesCode)
+
+relation_area_under_tab <- dplyr::distinct(relation, SpeciesName, StockCode, ICESArea, StockKey)
+
+relation_area_under_t <- tidyr::spread(relation_area_under_tab, key = ICESArea, value = StockKey)
+```
+
+# Add FMU to relation
+```{r}
+relation$FMU <- NA
+
+relation$FMU[substr(relation$StockCode, 1, 6) == "san.sa"] <- 
+  substr(relation$StockCode, 5, 10)[substr(relation$StockCode, 1, 6) == "san.sa"]
+
+relation$FMU[relation$StockCode == "her.27.irls" & relation$ICESArea == "27.7.a"] <- 
+  "27.7.a.s"
+
+relation$FMU[relation$StockCode == "her.27.nirs" & relation$ICESArea == "27.7.a"] <- 
+  "27.7.a.n"
+
+relation$FMU[relation$StockCode == "her.27.6aS7bc" & relation$ICESArea == "27.6.a"] <- 
+  "27.6.a.s"
+
+relation$FMU[relation$StockCode == "her.27.6aN" & relation$ICESArea == "27.6.a"] <- 
+  "27.6.a.n"
+
+# relation$FMU[relation$StockCode == "her.27.1-24a514a" & relation$ICESArea == "27.4.a"] <- 
+  # "27.6.a.n"
+
+
+#her.27.1-24a514a
+
+
+```
+
+
+# Check relation per species
+```{r, results='asis'}
+
+dup <- mutate(group_by(relation, SpeciesName, ICESArea, FMU), no = length(StockCode))
+nrow(subset(dup, no > 1))
+
+
+```
+
+
+# Export
+
+```{r, eval = F}
+dtu_aqua_stock_relation <- relation
+
+usethis::use_data(dtu_aqua_stock_relation, internal = F, overwrite = T)
+
+
+```
