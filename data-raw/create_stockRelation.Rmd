@@ -543,7 +543,7 @@ nrow(subset(dup, no > 1))
 
 # Export
 
-```{r, eval = F}
+```{r, eval = T}
 dtu_aqua_stock_relation <- relation
 
 usethis::use_data(dtu_aqua_stock_relation, internal = F, overwrite = T)
